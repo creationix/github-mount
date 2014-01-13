@@ -1,0 +1,31 @@
+{
+  "name": "github-mount",
+  "version": "0.0.0",
+  "description": "Mount github repos as git published local subdomains ",
+  "main": "server.js",
+  "dependencies": {
+    "git-publish-http": "~0.0.1",
+    "js-github": "~0.1.1",
+    "git-publisher": "~0.0.1",
+    "js-linker": "~0.0.2"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/creationix/github-mount.git"
+  },
+  "keywords": [
+    "js-git",
+    "publish"
+  ],
+  "author": "Tim Caswell <tim@creationix.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/creationix/github-mount/issues"
+  },
+  "homepage": "https://github.com/creationix/github-mount"
+}
