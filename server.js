@@ -151,6 +151,8 @@ function rootCheck(repo, callback) {
   // Get the root, but throttle request rate.
   var root;
   var last = Date.now();
+  var lastCommit = null;
+  repo.readRef("refs/heads/master", onRef);
   repo.loadAs("commit", "refs/heads/master", onRoot);
   return getRoot;
 
@@ -158,19 +160,32 @@ function rootCheck(repo, callback) {
     var now = Date.now();
     if ((now - last) > 5000) {
       last = now;
-      repo.loadAs("commit", "refs/heads/master", onRoot);
+      repo.readRef("refs/heads/master", onRef);
     }
     return root;
   }
 
+  function onRef(err, ref) {
+    if (err) return flush(err);
+    if (!ref) return flush(new Error("Missing master branch"));
+    if (lastCommit === ref) return;
+    lastCommit = ref;
+    repo.loadAs("commit", ref, onRoot);
+  }
+
   function onRoot(err, commit) {
-    if (err) console.error(err.stack);
+    if (err) return flush(err);
+    if (err) return console.error(err.stack);
     if (commit) root = commit.tree;
-    if (callback) {
-      var cb = callback;
-      callback = null;
-      cb(err, root);
-    }
+    flush();
+  }
+
+  function flush(err) {
+    if (err) console.error(err.stack);
+    if (!callback) return;
+    var cb = callback;
+    callback = null;
+    cb(err, root);
   }
 }
 
