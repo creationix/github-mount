@@ -49,9 +49,9 @@ function handleCommand(req, callback) {
 
   return compile(repo, root, "filters/" + name + ".js", function (err, result) {
     if (err) return callback(err);
-    console.log("RESULT", result);
+    result(req, callback);
   });
-  
+
 //   function onEntry(err, entry) {
 //     if (err) return callback(err);
 //     if (!entry) return new Error("Unknown filter: " + name);
@@ -63,7 +63,7 @@ function handleCommand(req, callback) {
 //     }
 //     repo.loadAs("text", entry.hash, onJs);
 //   }
-  
+
 //   function onJs(err, js) {
 //     if (err) return callback(err);
 //     var deps = module.deps = mine(js);
@@ -72,7 +72,7 @@ function handleCommand(req, callback) {
 //       return repo.pathToEntry(root, "filters/modules/" + match.name + ".js");
 //     }), onEntries);
 //   }
-  
+
 //   function onEntries(err, entries) {
 //     if (err) return callback(err);
 //     var deps = module.deps;
@@ -81,11 +81,11 @@ function handleCommand(req, callback) {
 //     });
 //     onDeps();
 //   }
-  
+
 //   function onDeps() {
 //     console.log(module);
 //   }
-      
+
 //   var top = cache[root];
 //   var dir = top.filters;
 //   if (!dir) return callback(new Error("Missing filters in root: " + root));
@@ -102,7 +102,7 @@ function handleCommand(req, callback) {
 //     return callback(new Error("No such filter '" + req.name + "' in root: " + root));
 //   }
 //   var module = modules[name];
-  
+
 //   function onModule() {
 //   if (!module) {
 //     return repo.loadAs("text", entry.hash, function (err, js) {
@@ -117,41 +117,55 @@ function handleCommand(req, callback) {
 //   module.fn(req, callback);
 }
 
-// Cached modules by path
-// module contains { hash, deps: [{path,hash}], fn, pending:[callback] }
-var defs = {};
+// Key is path to module, value is live module exports object
+var modules = null;
+var lastRoot = null;
 function compile(repo, root, path, callback) {
-  var def = {
-    hash: null,
-    deps: null,
-    fn: null,
-  };
+  if (!callback) return compile.bind(this, repo, root, path);
+
+  // Invalidate all the module caches on a change anywhere in the tree.
+  if (lastRoot !== root) {
+    modules = {};
+    lastRoot = root;
+  }
+
+  // Check the cache for an already compiled module.
+  var module = modules[path];
+  if (module) return callback(null, module);
+
+  var deps, js;
+
   return repo.pathToEntry(root, path, onEntry);
-  
+
   function onEntry(err, entry) {
     if (!entry) return callback(err);
-    def.hash = entry.hash;
     return repo.loadAs("text", entry.hash, onJs);
   }
-  
-  function onJs(err, js) {
+
+  function onJs(err, result) {
     if (err) return callback(err);
-    var deps = def.deps = [];
-    parallel(mine(js).map(function (dep, i) {
+    js = result;
+    deps = mine(js);
+    if (!deps.length) return onDeps();
+    parallel(deps.map(function (dep, i) {
       var depPath = pathJoin(path, "..", dep.name);
-      deps[i] = { path: depPath, hash: null };
-      return repo.pathToEntry(root, depPath);
-    }), onEntries);
+      deps[i].path = depPath;
+      return compile(repo, root, depPath);
+    }), onDeps);
   }
-  
-  function onEntries(err, entries) {
+
+  function onDeps(err) {
     if (err) return callback(err);
-    var deps = def.deps;
-    entries.forEach(function (entry, i) {
-      deps[i].hash = entry.hash;
-    });
-    console.log(def)
+    if (deps.length) {
+      for (var i = deps.length - 1; i >= 0; i--) {
+        var dep = deps[i];
+        js = js.substr(0, dep.offset) + dep.path + js.substr(dep.offset + dep.name.length);
+      }
+    }
+    var module = modules[path] = compileModule(js, path);
+    callback(null, module);
   }
+
 }
 
 
@@ -176,10 +190,7 @@ function compileModule(js, filename) {
 }
 
 function fakeRequire(name) {
-  if (name === "sha1") return require('js-git/lib/sha1.js');
-  if (name === "parallel") return require('js-git/lib/parallel.js');
-  if (name === "path-join") return require('js-linker/pathjoin.js');
-  if (name === "mine") return require('js-linker/mine.js');
+  if (name in modules) return modules[name];
   throw new Error("Invalid require in sandbox: " + name);
 }
 
