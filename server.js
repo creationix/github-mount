@@ -6,12 +6,11 @@ var gitPublisher = require('git-publisher');
 var http = require('http');
 var mine = require('js-linker/mine.js');
 var pathJoin = require('js-linker/pathjoin.js');
-var parallel = require('js-git/lib/parallel.js');
 
 var repos = {};
 
 var server = http.createServer(onRequest);
-server.listen(process.env.PORT || 8080, function () {
+server.listen(process.env.PORT || 8000, function () {
   console.log("Server listening at http://localhost:%s/", server.address().port);
 });
 
@@ -47,151 +46,104 @@ function handleCommand(req, callback) {
   var root = req.root;
   var name = req.name;
 
-  return compile(repo, root, "filters/" + name + ".js", function (err, result) {
+  repo.pathToEntry(root, "filters", function (err, entry) {
     if (err) return callback(err);
-    result(req, callback);
+    if (!entry || entry.mode !== 040000) {
+      return callback(new Error("Missing filters folder"));
+    }
+    if (!repo.filterCompiler || repo.filterCompiler.root !== entry.hash) {
+      repo.filterCompiler = compiler(repo, entry.hash);
+    }
+    repo.filterCompiler(name + ".js", function (err, result) {
+      if (err) return callback(err);
+      if (!result) return callback(new Error("No such filter: " + name));
+      result(req, callback);
+    });
   });
 
-//   function onEntry(err, entry) {
-//     if (err) return callback(err);
-//     if (!entry) return new Error("Unknown filter: " + name);
-//     module.hash = entry.hash;
-//     var deps = modDeps[entry.hash];
-//     if (deps) {
-//       module.deps = deps;
-//       return onDeps();
-//     }
-//     repo.loadAs("text", entry.hash, onJs);
-//   }
-
-//   function onJs(err, js) {
-//     if (err) return callback(err);
-//     var deps = module.deps = mine(js);
-//     module.js = js;
-//     parallel(deps.map(function (match) {
-//       return repo.pathToEntry(root, "filters/modules/" + match.name + ".js");
-//     }), onEntries);
-//   }
-
-//   function onEntries(err, entries) {
-//     if (err) return callback(err);
-//     var deps = module.deps;
-//     entries.forEach(function (entry, i) {
-//       deps[i].hash = entry.hash;
-//     });
-//     onDeps();
-//   }
-
-//   function onDeps() {
-//     console.log(module);
-//   }
-
-//   var top = cache[root];
-//   var dir = top.filters;
-//   if (!dir) return callback(new Error("Missing filters in root: " + root));
-//   var tree = cache[dir.hash];
-//   if (!tree) {
-//     return repo.loadAs("tree", dir.hash, function (err, tree) {
-//       if (err) return callback(err);
-//       cache[dir.hash] = tree;
-//       return handleCommand(req, callback);
-//     });
-//   }
-//   var entry = tree[name + ".js"];
-//   if (!entry) {
-//     return callback(new Error("No such filter '" + req.name + "' in root: " + root));
-//   }
-//   var module = modules[name];
-
-//   function onModule() {
-//   if (!module) {
-//     return repo.loadAs("text", entry.hash, function (err, js) {
-//       if (err) return callback(err);
-//       modules[name] = {
-//         hash: entry.hash,
-//         fn: compileModule(js, "git:" + root + ":/filters/" + name + ".js")
-//       };
-//     return handleCommand(req, callback);
-//     });
-//   }
-//   module.fn(req, callback);
 }
 
-// Key is path to module, value is live module exports object
-var modules = null;
-var lastRoot = null;
-function compile(repo, root, path, callback) {
-  if (!callback) return compile.bind(this, repo, root, path);
+function compiler(repo, root) {
+  // Cached modules by path
+  var cache = {};
+  // Callback lists per path
+  var pending = {};
+  compile.root = root;
+  return compile;
 
-  // Invalidate all the module caches on a change anywhere in the tree.
-  if (lastRoot !== root) {
-    modules = {};
-    lastRoot = root;
-  }
+  function compile(path, callback) {
+    if (!callback) return compile.bind(this, path);
 
-  // Check the cache for an already compiled module.
-  var module = modules[path];
-  if (module) return callback(null, module);
+    var module = cache[path];
+    if (module) return callback(null, module);
 
-  var deps, js;
+    if (pending[path]) {
+      return pending[path].push(callback);
+    }
+    pending[path] = [callback];
 
-  return repo.pathToEntry(root, path, onEntry);
+    var js, deps;
+    return repo.pathToEntry(root, path, onEntry);
 
-  function onEntry(err, entry) {
-    if (!entry) return callback(err);
-    return repo.loadAs("text", entry.hash, onJs);
-  }
+    function onEntry(err, entry) {
+      if (!entry) return flush(err);
+      repo.loadAs("text", entry.hash, onJs);
+    }
 
-  function onJs(err, result) {
-    if (err) return callback(err);
-    js = result;
-    deps = mine(js);
-    if (!deps.length) return onDeps();
-    parallel(deps.map(function (dep, i) {
-      var depPath = pathJoin(path, "..", dep.name);
-      deps[i].path = depPath;
-      return compile(repo, root, depPath);
-    }), onDeps);
-  }
+    function onJs(err, result) {
+      if (err) return flush(err);
+      js = result;
+      deps = mine(js);
+      parallel(deps.map(function (dep, i) {
+        var depPath = pathJoin(path, "..", dep.name);
+        deps[i].path = depPath;
+        return compile(depPath);
+      }), onDeps);
+    }
 
-  function onDeps(err) {
-    if (err) return callback(err);
-    if (deps.length) {
+    function onDeps(err) {
+      if (err) return flush(err);
       for (var i = deps.length - 1; i >= 0; i--) {
         var dep = deps[i];
         js = js.substr(0, dep.offset) + dep.path + js.substr(dep.offset + dep.name.length);
       }
+      var module = cache[path] = compileModule(js, path);
+      flush(null, module);
     }
-    var module = modules[path] = compileModule(js, path);
-    callback(null, module);
+
+    function flush() {
+      var callbacks = pending[path];
+      delete pending[path];
+      for (var i = 0, l = callbacks.length; i < l; i++) {
+        callbacks[i].apply(this, arguments);
+      }
+    }
   }
 
-}
+  function compileModule(js, filename) {
+    var exports = {};
+    var module = {exports:exports};
+    var sandbox = {
+      console: console,
+      require: fakeRequire,
+      module: module,
+      exports: exports
+    };
+    vm.runInNewContext(js, sandbox, filename);
+    // TODO: find a way to run this safely that doesn't crash the main process
+    // when there are errors in the user-provided script.
+
+    // Alternative implementation that doesn't use VM.
+    // Function("module", "exports", "require", js)(module, exports, fakeRequire);
+    return module.exports;
+  }
+
+  function fakeRequire(name) {
+    if (name in cache) return cache[name];
+    throw new Error("Invalid require in sandbox: " + name);
+  }
 
 
-
-
-function compileModule(js, filename) {
-  var exports = {};
-  var module = {exports:exports};
-  var sandbox = {
-    console: console,
-    require: fakeRequire,
-    module: module,
-    exports: exports
-  };
-  vm.runInNewContext(js, sandbox, filename);
-  // TODO: find a way to run this safely that doesn't crash the main process
-  // when there are errors in the user-provided script.
-
-  // Alternative implementation that doesn't use VM.
-  // Function("module", "exports", "require", js)(module, exports, fakeRequire);
-  return module.exports;
-}
-
-function fakeRequire(name) {
-  if (name in modules) return modules[name];
-  throw new Error("Invalid require in sandbox: " + name);
 }
 
 
@@ -214,6 +166,56 @@ function rootCheck(repo, callback) {
   function onRoot(err, commit) {
     if (err) console.error(err.stack);
     if (commit) root = commit.tree;
-    callback && callback(err);
+    if (callback) {
+      var cb = callback;
+      callback = null;
+      cb(err, root);
+    }
+  }
+}
+
+// Run several continuables in parallel.  The results are stored in the same
+// shape as the input continuables (array or object).
+// Returns a new continuable or accepts a callback.
+// This will bail on the first error and ignore all others after it.
+function parallel(commands, callback) {
+  if (!callback) return parallel.bind(this, commands);
+  var results, length, left, i, done;
+
+  // Handle array shapes
+  if (Array.isArray(commands)) {
+    left = length = commands.length;
+    results = new Array(left);
+    if (!length) return callback(null, results);
+    for (i = 0; i < length; i++) {
+      run(i, commands[i]);
+    }
+  }
+
+  // Otherwise assume it's an object.
+  else {
+    var keys = Object.keys(commands);
+    left = length = keys.length;
+    results = {};
+    if (!length) return callback(null, results);
+    for (i = 0; i < length; i++) {
+      var key = keys[i];
+      run(key, commands[key]);
+    }
+  }
+
+  // Common logic for both
+  function run(key, command) {
+    command(function (err, result) {
+      if (done) return;
+      if (err) {
+        done = true;
+        return callback(err);
+      }
+      results[key] = result;
+      if (--left) return;
+      done = true;
+      callback(null, results);
+    });
   }
 }
