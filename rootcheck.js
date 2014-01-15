@@ -6,11 +6,21 @@ function rootCheck(repo, refName, callback) {
   if (refName === "refs/tags/current") {
     process.nextTick(callback);
     callback = null;
+    var pending = null;
     return function (callback) {
+      if (pending) return pending.push(callback);
       var now = Date.now();
-      if (root && (now - last) < 500) return callback(null, root);
+      if (root && ((now - last) < 500)) return callback(null, root);
+      pending = [callback];
       last = now;
-      repo.readRef(refName, callback);
+      repo.readRef(refName, function (err, result) {
+        root = result;
+        var callbacks = pending;
+        pending = null;
+        for (var i = 0, l = callbacks.length; i < l; i++) {
+          callbacks[i](err, root);
+        }
+      });
     };
   }
   // Get the root, but throttle request rate.
