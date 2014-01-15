@@ -16,6 +16,14 @@ function addCache(repo, hashCache) {
     function onCache(err, result) {
       if (err) return onDone(err);
       if (result) {
+        if (result.type === "text" && type === "blob") {
+          result.body = new Buffer(result.body);
+          result.type = "blob";
+        }
+        else if (result.type === "blob" && type === "text") {
+          result.body = result.body.toString();
+          result.type = "text";
+        }
         if (result.type !== type) return onDone(new Error("Type mismatch"));
         object = result;
         return onDone();
