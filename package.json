@@ -6,7 +6,7 @@
   "dependencies": {
     "git-publish-http": "~0.0.1",
     "js-github": "~0.1.2",
-    "git-publisher": "~0.1.0",
+    "git-publisher": "~0.1.1",
     "js-linker": "~0.0.2"
   },
   "devDependencies": {},

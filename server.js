@@ -16,29 +16,40 @@ server.listen(process.env.PORT || 8000, function () {
 
 function onRequest(req, res) {
 
-  var host = req.headers.host && req.headers.host.match(/^([^.]*)/)[1];
+  var match = req.headers.host && req.headers.host.match(/^(.*)\.[^.]+(?:\.com|\.org)?(?::[0-9]+)?$/);
+  var host = match && match[1];
+  var name = host;
   if (!host) {
     res.statusCode = 404;
     return res.end("Missing Host header");
   }
+  var ref = "refs/heads/master";
+  if (host.substr(0, 8) === "current.") {
+    ref = "refs/tags/current";
+    name = host.substr(8);
+  }
 
   var repo = repos[host];
   if (!repo) {
-    repo = repos[host] = jsGithub("creationix/" + host, accessToken);
+    repo = repos[host] = jsGithub("creationix/" + name, accessToken);
     repo.handleCommand = handleCommand;
     gitPublisher(repo);
-    repo.getRoot = rootCheck(repo, onRequest.bind(this, req, res));
+    repo.getRoot = rootCheck(repo, ref, onRequest.bind(this, req, res));
     return;
   }
 
-  // Log requests
+  // Log requesst
   var end = res.end;
   res.end = function () {
     console.log(req.method, req.url, res.statusCode);
     return end.apply(this, arguments);
   };
 
-  handleRequest(repo, repo.getRoot(), req, res);
+  repo.getRoot(function (err, root) {
+    if (err) throw err;
+    handleRequest(repo, root, req, res);
+  });
+
 }
 
 function handleCommand(req, callback) {
@@ -107,7 +118,7 @@ function compiler(repo, root) {
         var dep = deps[i];
         js = js.substr(0, dep.offset) + dep.path + js.substr(dep.offset + dep.name.length);
       }
-      var module = cache[path] = compileModule(js, path);
+      var module = cache[path] = compileModule(js, root + ":" + path);
       flush(null, module);
     }
 
@@ -146,28 +157,41 @@ function compiler(repo, root) {
 
 }
 
-
-function rootCheck(repo, callback) {
-  // Get the root, but throttle request rate.
+function rootCheck(repo, refName, callback) {
   var root;
   var last = Date.now();
+  // Current is a non-throttled check
+  if (refName === "refs/tags/current") {
+    process.nextTick(callback);
+    callback = null;
+    return function (callback) {
+      var now = Date.now();
+      if (root && (now - last) < 500) return callback(null, root);
+      last = now;
+      repo.readRef(refName, callback);
+    };
+  }
+  // Get the root, but throttle request rate.
   var lastCommit = null;
-  repo.readRef("refs/heads/master", onRef);
-  repo.loadAs("commit", "refs/heads/master", onRoot);
+  repo.readRef(refName, onRef);
   return getRoot;
 
-  function getRoot() {
+  function getRoot(callback) {
     var now = Date.now();
     if ((now - last) > 5000) {
       last = now;
-      repo.readRef("refs/heads/master", onRef);
+      repo.readRef(refName, onRef);
     }
-    return root;
+    return callback(null, root);
   }
 
   function onRef(err, ref) {
     if (err) return flush(err);
-    if (!ref) return flush(new Error("Missing master branch"));
+    if (!ref) return flush(new Error("Missing " + ref));
+    if (refName === "refs/tags/current") {
+      root = ref;
+      return flush();
+    }
     if (lastCommit === ref) return;
     lastCommit = ref;
     repo.loadAs("commit", ref, onRoot);
