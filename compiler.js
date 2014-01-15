@@ -67,7 +67,8 @@ function compiler(repo, root) {
       console: console,
       require: fakeRequire,
       module: module,
-      exports: exports
+      exports: exports,
+      Buffer: Buffer
     };
     vm.runInNewContext(js, sandbox, filename);
     // TODO: find a way to run this safely that doesn't crash the main process
