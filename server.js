@@ -6,10 +6,11 @@ var http = require('http');
 // var hashCache = require('./memcache.js');
 var addCache = require('./addcache.js');
 var compiler = require('./compiler.js');
-var rootCheck = require('./rootCheck.js');
+var rootCheck = require('./rootcheck.js');
+var pathJoin = require('path').join;
 
 var hashCache;
-require('./levelcache.js')("cache.db", function (err, result) {
+require('./levelcache.js')(pathJoin(__dirname , "cache.db"), function (err, result) {
   if (err) throw err;
   hashCache = result;
 });
