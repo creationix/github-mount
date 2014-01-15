@@ -16,7 +16,7 @@ server.listen(process.env.PORT || 8000, function () {
 
 function onRequest(req, res) {
 
-  var match = req.headers.host && req.headers.host.match(/^(.*)\.[^.]+(?:\.com|\.org)?(?::[0-9]+)?$/);
+  var match = req.headers.host && req.headers.host.match(/^(.*)\.[^.]+(?:\.com|\.org)+?(?::[0-9]+)?$/);
   var host = match && match[1];
   var name = host;
   if (!host) {
