@@ -14,6 +14,26 @@ server.listen(process.env.PORT || 8000, function () {
   console.log("Server listening at http://localhost:%s/", server.address().port);
 });
 
+
+var cache = {};
+var hashCache = {
+  has: function (hash, callback) {
+    process.nextTick(function () {
+      callback(null, hash in cache);
+    });
+  },
+  get: function (hash, callback) {
+    process.nextTick(function () {
+      callback(null, cache[hash]);
+    });
+  },
+  set: function (hash, value, callback) {
+    cache[hash] = value;
+    process.nextTick(callback);
+  }
+};
+
+
 function onRequest(req, res) {
 
   var match = req.headers.host && req.headers.host.match(/^(.*)\.[^.]+(?:\.com|\.org)+?(?::[0-9]+)?$/);
